@@ -1,5 +1,5 @@
 import os, sys
-from typing import ClassVar, Final, List, Mapping, Optional, Sequence, Dict, Any
+from typing import ClassVar, Tuple, List, Mapping, Optional, Sequence, Dict, Any
 
 from typing_extensions import Self
 from viam.media.video import ViamImage
@@ -11,6 +11,8 @@ from viam.resource.base import ResourceBase
 from viam.resource.easy_resource import EasyResource
 from viam.resource.types import Model, ModelFamily
 from viam.services.vision import *
+from viam.components.camera import Camera
+
 from viam.utils import ValueTypes
 from viam.utils import struct_to_dict
 from viam.logging import getLogger
@@ -34,6 +36,7 @@ class GoogleVisionService(Vision, EasyResource):
         # Google vision client
         self.client = None
 
+        self.camera = None
 
     @classmethod
     def new(
@@ -50,6 +53,15 @@ class GoogleVisionService(Vision, EasyResource):
             Self: The resource
         """
         return super().new(config, dependencies)
+
+    @classmethod
+    def _validate_camera(cls, attrs: Dict[str, Any], required_dependencies: list):
+        """Validate camera component is available."""
+        camera_name = attrs.get("camera_name")
+        if not camera_name or not isinstance(camera_name, str):
+            raise ValueError("'camera_name' is required and must be a string.")
+        required_dependencies.append(camera_name)
+        LOGGER.info(f"Validated camera dependency: {camera_name}")
 
     @classmethod 
     def _validate_credentials(cls, attrs: Dict[str, Any]):
@@ -76,10 +88,9 @@ class GoogleVisionService(Vision, EasyResource):
             LOGGER.info(f"Found credentials file: {credentials_path}")
         elif has_env_credentials:
             LOGGER.info("Found GOOGLE_APPLICATION_CREDENTIALS environment variable")
-
-
+            
     @classmethod
-    def validate_config(cls, config: ComponentConfig) -> Sequence[str]:
+    def validate_config(cls, config: ComponentConfig) -> Tuple[Sequence[str], Sequence[str]]:
         """This method allows you to validate the configuration object received from the machine,
         as well as to return any implicit dependencies based on that `config`.
 
@@ -89,9 +100,33 @@ class GoogleVisionService(Vision, EasyResource):
         Returns:
             Sequence[str]: A list of implicit dependencies
         """
-        return []
+        optional_dependencies, required_dependencies = [], []
+        attrs = struct_to_dict(config.attributes)
+        
+        cls._validate_camera(attrs, required_dependencies)
+        cls._validate_credentials(attrs)
 
+        return required_dependencies, optional_dependencies
 
+    def _reconfigure_camera(self, attrs: Dict[str, Any], dependencies: Mapping[ResourceName, ResourceBase]) -> None:
+        """Get and store camera component during reconfigure."""
+        camera_name = attrs.get("camera_name")
+        
+        if not camera_name:
+            raise RuntimeError("Camera name is required but not provided")
+        
+        # Get the camera component from dependencies
+        camera_resource_name = Camera.get_resource_name(camera_name)
+        camera = dependencies.get(camera_resource_name)
+        
+        if not camera:
+            raise RuntimeError(f"Camera '{camera_name}' not found in dependencies")
+        
+        # Store both name and camera reference
+        self.camera_name = camera_name
+        self.camera = camera
+        self.logger.info(f"Camera configured: {camera_name}")
+    
     def _reconfigure_credentials(self, attrs: Dict[str, Any]) -> None:
         """
         Reconfigures the Google Vision API client with credentials.
@@ -143,10 +178,9 @@ class GoogleVisionService(Vision, EasyResource):
                 "3. Run 'gcloud auth application-default login'"
             )
             
-
     def reconfigure(
         self, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]
-    ):
+    ) -> None:
         """This method allows you to dynamically update your service when it receives a new `config` object.
 
         Args:
@@ -154,13 +188,13 @@ class GoogleVisionService(Vision, EasyResource):
             dependencies (Mapping[ResourceName, ResourceBase]): Any dependencies (both implicit and explicit)
         """
         
-    def reconfigure(
-        self, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]
-    ) -> None:
         """Initialize Google Vision API client with credentials."""
         self.logger.info("Configuring Google Vision API client...")
         attrs = struct_to_dict(config.attributes)
+        # Camera
+        self._reconfigure_camera(attrs, dependencies)
         
+        # Reconfigure Vision API client  
         self._reconfigure_credentials(attrs)
         
         if self.client:
