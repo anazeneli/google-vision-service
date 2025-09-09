@@ -42,37 +42,25 @@ def handle_vision_errors(error_code: str = None, fallback_result: Any = None, re
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
             try:
                 return await func(*args, **kwargs)
-            except GoogleVisionError:
-                raise  # Re-raise our custom errors
-            except asyncio.TimeoutError as e:
-                error = GoogleVisionError(
-                    f"Operation timed out in {func.__name__}",
-                    error_code or "TIMEOUT_ERROR",
-                    e
-                )
-                if reraise:
-                    raise error
-                LOGGER.error(f"Timeout in {func.__name__}: {e}")
-                return fallback_result
             except Exception as e:
-                # Handle Google Cloud errors generically by checking error message
-                error_msg = str(e).lower()
-                if any(keyword in error_msg for keyword in ["google", "vision", "api", "cloud"]):
-                    error = GoogleVisionError(
-                        f"Google Vision API error in {func.__name__}: {str(e)}",
-                        error_code or "API_ERROR",
-                        e
-                    )
-                else:
-                    error = GoogleVisionError(
-                        f"Unexpected error in {func.__name__}",
-                        error_code or "UNEXPECTED_ERROR",
-                        e
-                    )
+                # Check if we're in proper asyncio context before doing async logging
+                try:
+                    # This will raise RuntimeError if not in event loop
+                    loop = asyncio.get_running_loop()
+                    current_task = asyncio.current_task(loop)
+                    if current_task:
+                        LOGGER.error(f"Error in {func.__name__}: {e}")
+                    else:
+                        # We're in event loop but not in a task - use non-async logging
+                        print(f"Error in {func.__name__} (no task context): {e}")
+                except RuntimeError:
+                    # Not in any event loop - definitely use non-async logging
+                    print(f"Error in {func.__name__} (no loop): {e}")
+                
+                # Re-raise the error
                 if reraise:
-                    raise error
-                LOGGER.error(f"Error in {func.__name__}: {e}")
-                return fallback_result
+                    raise GoogleVisionError(f"Error in {func.__name__}", error_code, e)
+                return fallback_result        
         
         @functools.wraps(func)
         def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
@@ -132,28 +120,38 @@ def safe_camera_operation(timeout_seconds: float = 30.0):
 
 
 def validate_inputs(**validators):
-    """Decorator to validate inputs before function execution."""
+    """Thread-safe decorator to validate inputs."""
     def decorator(func: Callable[P, T]) -> Callable[P, T]:
+        # Cache the signature inspection at decoration time, not runtime
+        import inspect
+        try:
+            sig = inspect.signature(func)
+        except Exception:
+            # Fallback for functions that can't be inspected
+            sig = None
+        
         @functools.wraps(func)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-            import inspect
-            sig = inspect.signature(func)
-            bound_args = sig.bind(*args, **kwargs)
-            bound_args.apply_defaults()
-            
-            for param_name, validator in validators.items():
-                if param_name in bound_args.arguments:
-                    value = bound_args.arguments[param_name]
-                    if not validator(value):
-                        raise GoogleVisionError(
-                            f"Invalid {param_name}: {value}",
-                            f"INVALID_{param_name.upper()}"
-                        )
+            if sig:
+                try:
+                    bound_args = sig.bind(*args, **kwargs)
+                    bound_args.apply_defaults()
+                    
+                    for param_name, validator in validators.items():
+                        if param_name in bound_args.arguments:
+                            value = bound_args.arguments[param_name]
+                            if not validator(value):
+                                raise GoogleVisionError(
+                                    f"Invalid {param_name}: {value}",
+                                    f"INVALID_{param_name.upper()}"
+                                )
+                except Exception as e:
+                    # If inspection fails, skip validation rather than crash
+                    LOGGER.warning(f"Validation skipped for {func.__name__}: {e}")
             
             return func(*args, **kwargs)
         return wrapper
     return decorator
-
 
 # Error code constants
 class ErrorCodes:

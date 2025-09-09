@@ -65,6 +65,7 @@ class GoogleVisionService(Vision, EasyResource):
 
     def __init__(self, name: str):
         super().__init__(name)
+        self.logger = LOGGER 
         
         # Camera
         self.camera = None
