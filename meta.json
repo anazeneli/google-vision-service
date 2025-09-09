@@ -1,0 +1,28 @@
+{
+  "$schema": "https://dl.viam.dev/module.schema.json",
+  "module_id": "azeneli:google-vision",
+  "visibility": "public",
+  "url": "https://github.com/anazeneli/google-vision-service",
+  "description": "Google Cloud Vision API integration for Viam",
+  "models": [
+    {
+      "api": "rdk:service:vision",
+      "model": "azeneli:google-vision:google-vision-service",
+      "short_description": "Viam module wrapping the gogole vision service.",
+      "markdown_link": "README.md#model-azeneligoogle-visiongoogle-vision-service"
+    }
+  ],
+  "applications": null,
+  "markdown_link": "README.md",
+  "entrypoint": "./run.sh",
+  "first_run": "",
+  "build": {
+    "build": "./build.sh",
+    "setup": "./setup.sh",
+    "path": "dist/archive.tar.gz",
+    "arch": [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  }
+}
