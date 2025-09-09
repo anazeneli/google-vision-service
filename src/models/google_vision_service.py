@@ -1,5 +1,6 @@
 import os, sys
 from typing import ClassVar, Tuple, List, Mapping, Optional, Sequence, Dict, Any
+import hashlib
 
 from typing_extensions import Self
 from viam.media.video import ViamImage
@@ -40,14 +41,13 @@ class GoogleVisionService(Vision, EasyResource):
     """
     Google Vision AI service for Viam robotics platform.
     
-    Provides computer vision capabilities using Google Cloud Vision API including:
-    - OCR (Optical Character Recognition)
-    - Object detection
-    - Scene analysis
-    - Face detection
+    Provides OCR (Optical Character Recognition) capabilities using Google Cloud Vision API.
+    Extracts text from images with bounding boxes and confidence scores.
     
-    Supports multiple authentication methods and service modes for different
-    vision analysis tasks.
+    Supports multiple authentication methods:
+    - Service account JSON file
+    - GOOGLE_APPLICATION_CREDENTIALS environment variable  
+    - Default credentials (gcloud CLI)
     """
     
     MODEL: ClassVar[Model] = Model(
@@ -76,6 +76,10 @@ class GoogleVisionService(Vision, EasyResource):
         
         # General configuration    
         self.service_mode = "ocr_basic"
+        
+        # Limit API calls if same image rendered 
+        self.last_image_hash = None
+        self.last_detections = []
 
 
     @classmethod
@@ -302,8 +306,10 @@ class GoogleVisionService(Vision, EasyResource):
             attrs: Configuration attributes
         """
         self.service_mode = attrs.get("service_mode", "ocr_basic")
+        self.max_results = attrs.get("max_results")  # Add this
+        self.ocr_languages = attrs.get("ocr_languages")  # Add this too
         self.logger.info(f"Service configured: {self.service_mode}")
-
+        
     def reconfigure(
         self, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]
     ) -> None:
@@ -352,7 +358,10 @@ class GoogleVisionService(Vision, EasyResource):
                 e
             )
         
-    #@safe_camera_operation(timeout_seconds=30.0)
+    def _get_image_hash(self, image_bytes: bytes) -> str:
+        """Generate hash of image to detect changes."""
+        return hashlib.md5(image_bytes).hexdigest()
+
     async def get_detections_from_camera(
         self,
         camera_name: str,
@@ -409,91 +418,36 @@ class GoogleVisionService(Vision, EasyResource):
             raise GoogleVisionError("Vision client not initialized", ErrorCodes.CLIENT_NOT_INITIALIZED)
         
         image_bytes = self._viam_image_to_bytes(image)
-        
+
+        # Check if image has changed
+        current_hash = self._get_image_hash(image_bytes)
+        if current_hash == self.last_image_hash:
+            self.logger.info("Image unchanged, returning cached detections")
+            return self.last_detections
+
+        # Image changed, process it based on service mode
         if self.service_mode == "ocr_basic":
-            return await self._get_ocr_detections(image_bytes)
-        elif self.service_mode == "object_detection":
-            return await self._get_object_detections(image_bytes)
-        elif self.service_mode == "face_analysis":
-            return await self._get_face_detections(image_bytes)
+            detections = await self._get_ocr_detections(image_bytes)
         else:
             self.logger.warning(f"Service mode '{self.service_mode}' doesn't support detections")
-            return []
+            detections = []
 
-    #@safe_camera_operation(timeout_seconds=30.0)
-    async def get_classifications_from_camera(
-        self,
-        camera_name: str,
-        count: int,
-        *,
-        extra: Optional[Mapping[str, ValueTypes]] = None,
-        timeout: Optional[float] = None
-    ) -> List[Classification]:
-        """
-        Get classifications from the configured camera.
-        
-        Args:
-            camera_name: Name of camera (uses configured camera)
-            count: Maximum number of classifications to return
-            extra: Additional parameters
-            timeout: Operation timeout in seconds
-            
-        Returns:
-            List of classification results with confidence scores
-            
-        Raises:
-            GoogleVisionError: If camera not configured or operation fails
-        """
-        if not self.camera:
-            raise_camera_error("Camera not configured")
-        
-        image = await self.camera.get_image()
-        return await self.get_classifications(image, count, extra=extra, timeout=timeout)
+        # Cache the results regardless of service mode
+        self.last_image_hash = current_hash
+        self.last_detections = detections
 
-    @handle_vision_errors(error_code=ErrorCodes.CLASSIFICATION_FAILED)
-    @validate_inputs(
-        image=lambda x: x is not None,
-        count=lambda x: isinstance(x, int) and x > 0
-    )
-    async def get_classifications(
-        self,
-        image: ViamImage,
-        count: int,
-        *,
-        extra: Optional[Mapping[str, ValueTypes]] = None,
-        timeout: Optional[float] = None
-    ) -> List[Classification]:
-        """
-        Get classifications from an image using Google Vision API.
-        
-        Args:
-            image: Image to analyze
-            count: Maximum number of classifications to return
-            extra: Additional parameters
-            timeout: Operation timeout in seconds
-            
-        Returns:
-            List of classification results with confidence scores
-            
-        Raises:
-            GoogleVisionError: If analysis fails
-        """
-        if not self.client:
-            raise GoogleVisionError("Vision client not initialized", ErrorCodes.CLIENT_NOT_INITIALIZED)
-        
-        image_bytes = self._viam_image_to_bytes(image)
-        
-        if self.service_mode == "scene_labeling":
-            return await self._get_scene_classifications(image_bytes, count)
-        elif self.service_mode == "landmark_recognition":
-            return await self._get_landmark_classifications(image_bytes, count)
-        elif self.service_mode == "logo_recognition":
-            return await self._get_logo_classifications(image_bytes, count)
-        else:
-            self.logger.warning(f"Service mode '{self.service_mode}' doesn't support classifications")
-            return []
+        return detections
 
-    #@safe_camera_operation(timeout_seconds=30.0)
+    async def get_classifications(self, image: ViamImage, count: int, *, extra=None, timeout=None) -> List[Classification]:
+        """OCR service does not support classifications."""
+        self.logger.warning("OCR service doesn't support classifications")
+        return []
+
+    async def get_classifications_from_camera(self, camera_name: str, count: int, *, extra=None, timeout=None) -> List[Classification]:
+        """OCR service does not support classifications."""
+        self.logger.warning("OCR service doesn't support classifications")
+        return []
+ 
     async def capture_all_from_camera(
         self,
         camera_name: str,
@@ -580,7 +534,7 @@ class GoogleVisionService(Vision, EasyResource):
             self.logger.info("No text detected in image")
             return []
         
-        self.logger.debug(f"Total annotations: {len(response.text_annotations)}")
+        self.logger.info(f"Total annotations: {len(response.text_annotations)}")
         
         detections = []
         overall_confidence = 0.5
@@ -588,7 +542,7 @@ class GoogleVisionService(Vision, EasyResource):
         # Process individual text blocks (skip first annotation which is full text)
         for i, annotation in enumerate(response.text_annotations[1:]):
             text_content = annotation.description
-            self.logger.info(f"Processing annotation {i+1}: '{text_content}'")
+            self.logger.debug(f"Processing annotation {i+1}: '{text_content}'")
             
             try:
                 if not (annotation.bounding_poly and annotation.bounding_poly.vertices):
@@ -619,9 +573,14 @@ class GoogleVisionService(Vision, EasyResource):
                 self.logger.warning(f"Failed to process annotation {i+1}: {e}")
                 continue
         
+        # Apply max_results limit if configured
+        if self.max_results and len(detections) > self.max_results:
+            detections = detections[:self.max_results]
+            self.logger.debug(f"Limited results to {self.max_results} detections")
+
         self.logger.info(f"Returning {len(detections)} detections")
         return detections
-        
+            
         
     async def get_object_point_clouds(
         self,
