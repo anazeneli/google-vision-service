@@ -1,5 +1,5 @@
 google-cloud-vision>=3.7.0
 
-viam-sdk==0.54.2b0
+viam-sdk>=0.54.0
 
 typing-extensions

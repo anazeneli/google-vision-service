@@ -352,7 +352,7 @@ class GoogleVisionService(Vision, EasyResource):
                 e
             )
         
-    @safe_camera_operation(timeout_seconds=30.0)
+    #@safe_camera_operation(timeout_seconds=30.0)
     async def get_detections_from_camera(
         self,
         camera_name: str,
@@ -420,7 +420,7 @@ class GoogleVisionService(Vision, EasyResource):
             self.logger.warning(f"Service mode '{self.service_mode}' doesn't support detections")
             return []
 
-    @safe_camera_operation(timeout_seconds=30.0)
+    #@safe_camera_operation(timeout_seconds=30.0)
     async def get_classifications_from_camera(
         self,
         camera_name: str,
@@ -493,7 +493,7 @@ class GoogleVisionService(Vision, EasyResource):
             self.logger.warning(f"Service mode '{self.service_mode}' doesn't support classifications")
             return []
 
-    @safe_camera_operation(timeout_seconds=30.0)
+    #@safe_camera_operation(timeout_seconds=30.0)
     async def capture_all_from_camera(
         self,
         camera_name: str,
@@ -570,7 +570,6 @@ class GoogleVisionService(Vision, EasyResource):
         image_bytes=lambda x: x is not None and len(x) > 0
     )
     async def _get_ocr_detections(self, image_bytes: bytes) -> List[Detection]:
-        """Debug version to see what Google Vision returns."""
         vision_image = vision.Image(content=image_bytes)
         response = self.client.document_text_detection(image=vision_image)
         
@@ -581,12 +580,7 @@ class GoogleVisionService(Vision, EasyResource):
             self.logger.info("No text detected in image")
             return []
         
-        # DEBUG: Log everything we get from Google Vision
-        self.logger.info(f"Total annotations: {len(response.text_annotations)}")
-        
-        for i, annotation in enumerate(response.text_annotations):
-            text = annotation.description
-            self.logger.info(f"Annotation {i}: '{text}' (type: {type(text)}, length: {len(text)})")
+        self.logger.debug(f"Total annotations: {len(response.text_annotations)}")
         
         detections = []
         overall_confidence = 0.5
